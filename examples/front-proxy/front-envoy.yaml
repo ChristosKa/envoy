@@ -15,26 +15,62 @@ static_resources:
             name: local_route
             virtual_hosts:
             - name: backend
+              retry_policy:
+                num_retries: 10
+                retry_on: "5xx"
               domains:
               - "*"
               routes:
               - match:
                   prefix: "/service/1"
                 route:
-                  cluster: service1
+                  cluster: aggregate_cluster
               - match:
                   prefix: "/service/2"
                 route:
-                  cluster: service2
+                  cluster: aggregate_cluster
           http_filters:
           - name: envoy.filters.http.router
             typed_config: {}
   clusters:
+  - name: aggregate_cluster
+    connect_timeout: 0.25s
+    lb_policy: CLUSTER_PROVIDED
+    circuit_breakers:
+      thresholds:
+        max_requests: 10000
+        #max_retries": 3
+    outlier_detection:
+      consecutive_5xx: 5
+    load_assignment:
+      cluster_name: aggregate_service
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: service1
+                port_value: 80
+        - endpoint:
+            address:
+              socket_address:
+                address: service2
+                port_value: 80
+    cluster_type:
+      name: envoy.clusters.aggregate
+      typed_config:
+        "@type": type.googleapis.com/envoy.config.cluster.aggregate.v2alpha.ClusterConfig
+        clusters:
+        # cluster primary, secondary and tertiary should be defined outside.
+        - service1
+        - service2
   - name: service1
     connect_timeout: 0.25s
     type: strict_dns
     lb_policy: round_robin
     http2_protocol_options: {}
+    outlier_detection:
+      consecutive_5xx: 2
     load_assignment:
       cluster_name: service1
       endpoints:
@@ -45,10 +81,12 @@ static_resources:
                 address: service1
                 port_value: 80
   - name: service2
-    connect_timeout: 0.25s
+    connect_timeout: 5s
     type: strict_dns
     lb_policy: round_robin
     http2_protocol_options: {}
+    outlier_detection:
+      consecutive_5xx: 2
     load_assignment:
       cluster_name: service2
       endpoints:
